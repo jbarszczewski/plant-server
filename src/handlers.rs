@@ -1,62 +1,75 @@
-use actix_web::{Error, HttpResponse, Responder};
-use bson::{bson, doc};
+use actix_web::{web, Error, HttpResponse, Responder};
+use bson::{doc, oid::ObjectId, Bson, UtcDateTime};
 use chrono::prelude::*;
+use futures::stream::StreamExt;
 use mongodb::{options::ClientOptions, options::FindOptions, Client};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use std::sync::Mutex;
 
 #[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct Log {
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "_id")] // Use MongoDB's special primary key field name when serializing
-    pub id: Option<bson::oid::ObjectId>,
-    pub deviceId: String,
+    pub id: Option<ObjectId>,
+    #[serde(rename = "deviceId")]
+    pub device_id: String,
     pub message: String,
-    pub timestamp: i64,
+    pub timestamp: UtcDateTime,
 }
 
-const MONGO_URL: &'static str = "mongodb://free-tier-db:yfQtNbXyW2h9HUOOplCeHgjzzbJMnfMQn2BZuzAkw5gv0uBkqbdbQPdnQ98e6UtS5Z3p1ZrG4rgkmEKBURNgwg==@free-tier-db.mongo.cosmos.azure.com:10255/?ssl=true&replicaSet=globaldb&retrywrites=false&maxIdleTimeMS=120000&appName=@free-tier-db@";
 const MONGO_DB: &'static str = "iotPlantDB";
 const MONGO_COLL_LOGS: &'static str = "logs";
 
-pub async fn get_logs() -> impl Responder {
-    let mut client_options = ClientOptions::parse(MONGO_URL).await.unwrap();
-
-    // Manually set an option.
-    client_options.app_name = Some("PlantApi".to_string());
-
-    // Get a handle to the deployment.
-    let client = Client::with_options(client_options).unwrap();
-
-    // Get a handle to a database.
+pub async fn get_logs(data: web::Data<Arc<Mutex<Client>>>) -> impl Responder {
+    let client = data.lock().unwrap();
     let iot_db = client.database(MONGO_DB);
-
     let logs_collection = iot_db.collection(MONGO_COLL_LOGS);
-    let filter = doc! { "deviceId": "testDevice_1" };
-    let find_options = FindOptions::builder().sort(doc! { "timestamp": 1 }).build();
 
-    let cursor = logs_collection.find(filter, find_options).await;
-    HttpResponse::Ok().body("Getting logs not implemented yet!")
+    let filter = doc! { "deviceId": "test_device_1" };
+    //   let find_options = FindOptions::builder().sort(doc! { "timestamp": 1 }).build();
+    let find_options = FindOptions::builder().sort(doc! { "_id": -1}).build();
+    let mut cursor = logs_collection.find(filter, find_options).await.unwrap();
+
+    let mut results = Vec::new();
+    while let Some(result) = cursor.next().await {
+        match result {
+            Ok(document) => {
+                println!("document {}", document);
+                results.push(document);
+            }
+            _ => {}
+        }
+    }
+    HttpResponse::Ok().json(results)
 }
 
 pub async fn get_log_by_id() -> impl Responder {
     HttpResponse::Ok().body("Getting log by id not implemented yet!")
 }
 
-pub async fn add_log() -> Result<HttpResponse, Error> {
-    // Parse a connection string into an options struct.
-    let mut client_options = ClientOptions::parse(MONGO_URL).await.unwrap();
-
-    // Manually set an option.
-    client_options.app_name = Some("PlantApi".to_string());
-
-    // Get a handle to the deployment.
-    let client = Client::with_options(client_options).unwrap();
-
-    // Get a handle to a database.
+pub async fn add_log(
+    data: web::Data<Arc<Mutex<Client>>>,
+    device_id: String,
+    message: String,
+) -> impl Responder {
+    let client = data.lock().unwrap();
     let iot_db = client.database(MONGO_DB);
-
     let logs_collection = iot_db.collection(MONGO_COLL_LOGS);
 
-    let new_doc = doc! { "deviceId": "testDevice_1", "message": "George Orwell", "timestamp": bson::Bson::UtcDatetime(Utc::now())};
-    logs_collection.insert_one(new_doc, None).await; // Insert into a MongoDB collection
-    Ok(HttpResponse::Ok().body("Adding log not implemented yet!"))
+    match logs_collection.insert_one(doc! {"deviceId": device_id, "message": message, "timestamp": Bson::UtcDatetime(Utc::now())}, None).await {
+        Ok(db_result) => {
+            if let Some(new_id) = db_result.inserted_id.as_object_id() {
+                println!("New document inserted with id {}", new_id);            
+                //HttpResponse::Ok().json(new_id)
+            }
+            return HttpResponse::Created().json(db_result.inserted_id)
+        }
+        Err(err) =>
+        {
+            println!("Failed!");
+            return HttpResponse::InternalServerError().finish()
+        }
+    }
 }

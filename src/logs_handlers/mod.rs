@@ -1,37 +1,39 @@
-use actix_web::{web, Error, HttpResponse, Responder};
-use bson::{doc, oid::ObjectId, Bson, UtcDateTime};
+use actix_web::{web, HttpResponse, Responder};
+use bson::{doc, oid::ObjectId, Bson};
 use chrono::prelude::*;
 use futures::stream::StreamExt;
-use mongodb::{options::ClientOptions, options::FindOptions, Client};
+use mongodb::{options::FindOptions, Client};
 use rustc_serialize::hex::FromHex;
-use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use serde::Deserialize;
 use std::sync::Mutex;
 
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct Log {
-    //   #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(rename = "_id")] // Use MongoDB's special primary key field name when serializing
-    pub id: ObjectId,
-    #[serde(rename = "deviceId")]
-    pub device_id: String,
+#[derive(Deserialize)]
+pub struct NewLog {
+    pub id: String,
     pub message: String,
-    pub timestamp: UtcDateTime,
 }
 
 const MONGO_DB: &'static str = "iotPlantDB";
 const MONGO_COLL_LOGS: &'static str = "logs";
 
-pub async fn get_logs(data: web::Data<Arc<Mutex<Client>>>) -> impl Responder {
+pub fn scoped_config(cfg: &mut web::ServiceConfig) {
+    cfg.service(
+        web::resource("/logs")
+            .route(web::get().to(get_logs))
+            .route(web::post().to(add_log)),
+    );
+    cfg.service(web::resource("/logs/{id}").route(web::get().to(get_log_by_id)));
+}
+
+pub async fn get_logs(data: web::Data<Mutex<Client>>) -> impl Responder {
     let logs_collection = data
         .lock()
         .unwrap()
         .database(MONGO_DB)
         .collection(MONGO_COLL_LOGS);
 
-    let filter = doc! { "deviceId": "test_device_1" };
-    //   let find_options = FindOptions::builder().sort(doc! { "timestamp": 1 }).build();
+    let filter = doc! {};
+    //   let find_options = FindOptions::builder().sort(doc! { "createdOn": 1 }).build();
     let find_options = FindOptions::builder().sort(doc! { "_id": -1}).build();
     let mut cursor = logs_collection.find(filter, find_options).await.unwrap();
 
@@ -39,7 +41,6 @@ pub async fn get_logs(data: web::Data<Arc<Mutex<Client>>>) -> impl Responder {
     while let Some(result) = cursor.next().await {
         match result {
             Ok(document) => {
-                // let log: Log = bson::from_bson(Bson::Document(document)).unwrap();
                 results.push(document);
             }
             _ => {
@@ -51,7 +52,7 @@ pub async fn get_logs(data: web::Data<Arc<Mutex<Client>>>) -> impl Responder {
 }
 
 pub async fn get_log_by_id(
-    data: web::Data<Arc<Mutex<Client>>>,
+    data: web::Data<Mutex<Client>>,
     log_id: web::Path<String>,
 ) -> impl Responder {
     let logs_collection = data
@@ -81,18 +82,14 @@ pub async fn get_log_by_id(
     }
 }
 
-pub async fn add_log(
-    data: web::Data<Arc<Mutex<Client>>>,
-    device_id: String,
-    message: String,
-) -> impl Responder {
+pub async fn add_log(data: web::Data<Mutex<Client>>, new_log: web::Json<NewLog>) -> impl Responder {
     let logs_collection = data
         .lock()
         .unwrap()
         .database(MONGO_DB)
         .collection(MONGO_COLL_LOGS);
 
-    match logs_collection.insert_one(doc! {"deviceId": device_id, "message": message, "timestamp": Bson::UtcDatetime(Utc::now())}, None).await {
+    match logs_collection.insert_one(doc! {"deviceId": &new_log.id, "message": &new_log.message, "createdOn": Bson::DateTime(Utc::now())}, None).await {
         Ok(db_result) => {
             if let Some(new_id) = db_result.inserted_id.as_object_id() {
                 println!("New document inserted with id {}", new_id);   

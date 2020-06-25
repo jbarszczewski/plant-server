@@ -25,7 +25,7 @@ pub fn scoped_config(cfg: &mut web::ServiceConfig) {
     cfg.service(web::resource("/logs/{id}").route(web::get().to(get_log_by_id)));
 }
 
-pub async fn get_logs(data: web::Data<Mutex<Client>>) -> impl Responder {
+async fn get_logs(data: web::Data<Mutex<Client>>) -> impl Responder {
     let logs_collection = data
         .lock()
         .unwrap()
@@ -51,7 +51,7 @@ pub async fn get_logs(data: web::Data<Mutex<Client>>) -> impl Responder {
     HttpResponse::Ok().json(results)
 }
 
-pub async fn get_log_by_id(
+async fn get_log_by_id(
     data: web::Data<Mutex<Client>>,
     log_id: web::Path<String>,
 ) -> impl Responder {
@@ -82,7 +82,7 @@ pub async fn get_log_by_id(
     }
 }
 
-pub async fn add_log(data: web::Data<Mutex<Client>>, new_log: web::Json<NewLog>) -> impl Responder {
+async fn add_log(data: web::Data<Mutex<Client>>, new_log: web::Json<NewLog>) -> impl Responder {
     let logs_collection = data
         .lock()
         .unwrap()

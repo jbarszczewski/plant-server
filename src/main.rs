@@ -7,7 +7,9 @@ mod logs_handlers;
 
 #[actix_rt::main]
 async fn main() -> std::io::Result<()> {
-    env::set_var("RUST_LOG", "actix_web=debug");
+    if env::var_os("RUST_LOG").is_none() {
+        env::set_var("RUST_LOG", "actix_web=info");
+    }
     let mongo_url = env::var("CONNECTION_STRING_LOGS").unwrap();
     println!("Using connection string: {}", mongo_url);
     let mut client_options = ClientOptions::parse(&mongo_url).await.unwrap();
